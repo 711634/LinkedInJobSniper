@@ -35,9 +35,9 @@ SEARCH_TERMS = [
     "Graduate Consultant",
 ]
 LOCATIONS        = ["London, England"]
-RESULT_LIMIT     = 15
+RESULT_LIMIT     = 8
 HOURS_OLD        = 24
-SCORE_THRESHOLD  = int(os.getenv("SCORE_THRESHOLD", "50"))
+SCORE_THRESHOLD  = int(os.getenv("SCORE_THRESHOLD", "45"))
 TAILOR_THRESHOLD = 75          # only tailor CV for high-scoring jobs
 PROXY_URL        = os.getenv("PROXY_URL") or None
 RESUME           = os.getenv("RESUME_TEXT") or None
@@ -240,11 +240,16 @@ def evaluate_job(title: str, description: str) -> dict:
     if not description or len(str(description)) < 50:
         return {"score": 0, "reason": "No description", "yoe": "N/A"}
     try:
-        result = evaluation_chain.invoke({
-            "resume":      RESUME[:3000],
-            "title":       title,
-            "description": description[:3000]
-        })
+      "resume": RESUME[:2000],       # was 3000
+    "title": title,
+    "description": description[:1500]  # was 3000
+})
+
+# In tailor_resume_for_job()
+result = tailor_chain.invoke({
+    "resume":      RESUME[:2000],  # was 3000
+    "description": description[:1500]  # was 3000
+})
         return {"score": result.score, "reason": result.reason, "yoe": result.yoe}
     except Exception as e:
         print(f"  AI error for '{title}': {e}")
