@@ -26,7 +26,7 @@ SEARCH_TERMS = [
     "Graduate Operations Analyst",
     "Junior Data Analyst",
     "Graduate Scheme Finance",
-        "Associate Product Manager",
+    "Associate Product Manager",
     "Strategy and Operations Analyst",
     "GTM Associate",
     "Operations Associate",
@@ -34,16 +34,18 @@ SEARCH_TERMS = [
     "Business Development Associate",
     "Graduate Consultant",
 ]
-LOCATIONS       = ["London, England"]
-RESULT_LIMIT    = 15          # per search term
-HOURS_OLD       = 24
-SCORE_THRESHOLD = int(os.getenv("SCORE_THRESHOLD", "50"))
-PROXY_URL       = os.getenv("PROXY_URL") or None
-RESUME          = os.getenv("RESUME_TEXT") or None
-API_KEY         = os.getenv("API_KEY")
-BASE_URL        = os.getenv("API_BASE")
-LLM_MODEL       = os.getenv("LLM_MODEL", "mistral")
-CRITERIA        = os.getenv("CRITERIA", "")
+LOCATIONS        = ["London, England"]
+RESULT_LIMIT     = 15
+HOURS_OLD        = 24
+SCORE_THRESHOLD  = int(os.getenv("SCORE_THRESHOLD", "50"))
+TAILOR_THRESHOLD = 75          # only tailor CV for high-scoring jobs
+PROXY_URL        = os.getenv("PROXY_URL") or None
+RESUME           = os.getenv("RESUME_TEXT") or None
+API_KEY          = os.getenv("API_KEY")
+BASE_URL         = os.getenv("API_BASE")
+LLM_MODEL        = os.getenv("LLM_MODEL", "mistral")
+CRITERIA         = os.getenv("CRITERIA", "")
+SHEET_ID         = os.getenv("GOOGLE_SHEET_ID") or None
 
 # ── Resume: Google Drive fallback ─────────────────────────
 def load_resume_from_google_drive() -> str:
@@ -82,12 +84,14 @@ if not API_KEY:
     raise SystemExit("ERROR: No API_KEY set in .env")
 
 # ── LLM setup ─────────────────────────────────────────────
+llm = ChatOpenAI(model=LLM_MODEL, api_key=API_KEY, base_url=BASE_URL, temperature=0)
+
+# — Evaluation model —
 class JobEvaluation(BaseModel):
     score:  int = Field(description="Relevance score 0-100 based on resume match.")
     reason: str = Field(description="One-sentence reason for the score.")
     yoe:    str = Field(description="Years of experience required, or 'Not Specified'.")
 
-llm            = ChatOpenAI(model=LLM_MODEL, api_key=API_KEY, base_url=BASE_URL, temperature=0)
 structured_llm = llm.with_structured_output(JobEvaluation, method="json_mode")
 
 system_template = """You are an expert career coach. Evaluate how well a job description matches a candidate's resume.
@@ -102,11 +106,97 @@ Scoring criteria:
 Respond in JSON format with keys: score, reason, yoe.
 """ + CRITERIA
 
-prompt_template   = ChatPromptTemplate.from_messages([
+eval_prompt  = ChatPromptTemplate.from_messages([
     ("system", system_template),
     ("user", "RESUME:\n{resume}\n\nJOB TITLE: {title}\nJOB DESCRIPTION:\n{description}\n\nBe strict. Penalise roles requiring 3+ years experience.")
 ])
-evaluation_chain  = prompt_template | structured_llm
+evaluation_chain = eval_prompt | structured_llm
+
+# — Tailoring model —
+tailor_llm = ChatOpenAI(model=LLM_MODEL, api_key=API_KEY, base_url=BASE_URL, temperature=0.4)
+
+tailor_prompt = ChatPromptTemplate.from_messages([
+    ("system", """You are an expert CV writer. Given a resume and a job description, rewrite 3-4 of the
+most relevant bullet points from the candidate's experience to better mirror the job's language and keywords.
+Keep the same facts — do NOT invent achievements or numbers. Output ONLY the rewritten bullet points as a
+short HTML unordered list (<ul><li>...</li></ul>). No preamble, no explanation."""),
+    ("user", "RESUME:\n{resume}\n\nJOB TITLE: {title}\nJOB DESCRIPTION:\n{description}")
+])
+tailor_chain = tailor_prompt | tailor_llm
+
+def tailor_resume_for_job(title: str, description: str) -> str:
+    """Returns an HTML bullet list of tailored resume points."""
+    try:
+        result = tailor_chain.invoke({
+            "resume":      RESUME[:3000],
+            "title":       title,
+            "description": description[:3000]
+        })
+        return result.content.strip()
+    except Exception as e:
+        print(f"  Tailoring failed for '{title}': {e}")
+        return ""
+
+# ── Google Sheets ─────────────────────────────────────────
+def get_sheets_service():
+    creds_json_str = os.getenv("GCP_CREDENTIALS_JSON")
+    if not creds_json_str:
+        return None
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        creds_dict = json.loads(creds_json_str)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        return build('sheets', 'v4', credentials=creds)
+    except Exception as e:
+        print(f"Sheets service init failed: {e}")
+        return None
+
+def export_to_sheets(jobs: List[dict]):
+    if not SHEET_ID:
+        print("No GOOGLE_SHEET_ID set — skipping Sheets export.")
+        return
+    service = get_sheets_service()
+    if not service:
+        return
+    try:
+        sheet = service.spreadsheets()
+        # Check if header row exists
+        result = sheet.values().get(
+            spreadsheetId=SHEET_ID, range="Sheet1!A1:A1"
+        ).execute()
+        if not result.get("values"):
+            header = [["Date", "Score", "Title", "Company", "YoE", "Reason", "URL", "Applied?"]]
+            sheet.values().append(
+                spreadsheetId=SHEET_ID,
+                range="Sheet1!A1",
+                valueInputOption="RAW",
+                body={"values": header}
+            ).execute()
+
+        rows = [[
+            datetime.now().strftime("%d %b %Y"),
+            job["score"],
+            job["title"],
+            job["company"],
+            job["yoe"],
+            job["reason"],
+            job["job_url"],
+            "No"
+        ] for job in jobs]
+
+        sheet.values().append(
+            spreadsheetId=SHEET_ID,
+            range="Sheet1!A1",
+            valueInputOption="RAW",
+            body={"values": rows}
+        ).execute()
+        print(f"Exported {len(rows)} jobs to Google Sheets ✅")
+    except Exception as e:
+        print(f"Sheets export failed: {e}")
 
 # ── Scraping ──────────────────────────────────────────────
 def get_jobs_data(location: str, search_term: str) -> pd.DataFrame:
@@ -118,7 +208,7 @@ def get_jobs_data(location: str, search_term: str) -> pd.DataFrame:
                 site_name=["linkedin"],
                 search_term=search_term,
                 location=location,
-                results_wanted=RESULT_LIMIT,   # BUG FIX: was result_wanted
+                results_wanted=RESULT_LIMIT,
                 hours_old=HOURS_OLD,
                 proxies=proxies
             )
@@ -131,7 +221,6 @@ def get_jobs_data(location: str, search_term: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 def fetch_missing_description(url: str) -> str:
-    """Fallback scraper if jobspy returns no description."""
     try:
         time.sleep(random.uniform(2, 4))
         headers  = {"User-Agent": UserAgent().random, "Accept-Language": "en-US,en;q=0.9"}
@@ -152,8 +241,8 @@ def evaluate_job(title: str, description: str) -> dict:
         return {"score": 0, "reason": "No description", "yoe": "N/A"}
     try:
         result = evaluation_chain.invoke({
-            "resume": RESUME[:3000],
-            "title": title,
+            "resume":      RESUME[:3000],
+            "title":       title,
             "description": description[:3000]
         })
         return {"score": result.score, "reason": result.reason, "yoe": result.yoe}
@@ -173,20 +262,39 @@ def send_email(top_jobs: List[dict]):
 
     rows = ""
     for job in top_jobs:
-        color = "#27ae60" if job['score'] >= 75 else "#e67e22"
-        rows += f"""<tr>
-            <td style="padding:10px;border-bottom:1px solid #eee;font-weight:bold;color:{color};">{job['score']}</td>
+        score_color = "#27ae60" if job['score'] >= 75 else "#e67e22"
+
+        # Tailored CV section (only shown for high-scoring jobs)
+        tailor_html = ""
+        if job.get("tailored_bullets"):
+            tailor_html = f"""
+            <tr>
+                <td colspan="6" style="padding:8px 10px 14px 10px;background:#f0fff4;border-bottom:2px solid #27ae60;">
+                    <b style="color:#27ae60;">✨ Tailored CV Bullets for this role:</b><br>
+                    <div style="font-size:13px;color:#2c3e50;margin-top:4px;">{job['tailored_bullets']}</div>
+                </td>
+            </tr>"""
+
+        rows += f"""
+        <tr>
+            <td style="padding:10px;border-bottom:1px solid #eee;font-weight:bold;color:{score_color};">{job['score']}</td>
             <td style="padding:10px;border-bottom:1px solid #eee;">{job['title']}</td>
             <td style="padding:10px;border-bottom:1px solid #eee;">{job['company']}</td>
             <td style="padding:10px;border-bottom:1px solid #eee;">{job['yoe']}</td>
             <td style="padding:10px;border-bottom:1px solid #eee;font-size:13px;color:#555;">{job['reason']}</td>
             <td style="padding:10px;border-bottom:1px solid #eee;">
                 <a href="{job['job_url']}" style="background:#0a66c2;color:white;padding:6px 12px;text-decoration:none;border-radius:4px;font-size:12px;">Apply</a>
-            </td></tr>"""
+            </td>
+        </tr>{tailor_html}"""
+
+    sheets_note = ""
+    if SHEET_ID:
+        sheets_note = f'<p style="font-size:12px;color:#555;">📊 All jobs exported to <a href="https://docs.google.com/spreadsheets/d/{SHEET_ID}">your tracking sheet</a> — mark Applied when done!</p>'
 
     html = f"""<html><body style="font-family:Arial,sans-serif;max-width:900px;margin:auto;">
         <h2 style="color:#2c3e50;">🎯 LinkedIn Job Sniper — Daily Report</h2>
-        <p><b>{len(top_jobs)}</b> roles scored ≥{SCORE_THRESHOLD} today</p>
+        <p><b>{len(top_jobs)}</b> roles scored ≥{SCORE_THRESHOLD} today · ✨ = tailored CV bullets included</p>
+        {sheets_note}
         <table style="border-collapse:collapse;width:100%;">
             <tr style="background:#f8f9fa;">
                 <th style="padding:10px;border-bottom:2px solid #ddd;text-align:left;">Score</th>
@@ -197,7 +305,7 @@ def send_email(top_jobs: List[dict]):
                 <th style="padding:10px;border-bottom:2px solid #ddd;text-align:left;">Link</th>
             </tr>{rows}
         </table>
-        <p style="margin-top:20px;font-size:11px;color:#aaa;">Powered by LinkedIn Job Sniper · LangChain · Ollama/Groq</p>
+        <p style="margin-top:20px;font-size:11px;color:#aaa;">Powered by LinkedIn Job Sniper · LangChain · Groq</p>
     </body></html>"""
 
     msg = MIMEMultipart()
@@ -225,7 +333,6 @@ def main():
         print("No jobs found. Check proxy/network.")
         return
 
-    # Deduplicate  (BUG FIX: same job matched by multiple search terms)
     df = df.drop_duplicates(subset=["job_url"]).reset_index(drop=True)
     print(f"\nTotal unique jobs to evaluate: {len(df)}")
 
@@ -247,18 +354,32 @@ def main():
         print(f"  [{result['score']:3d}] {title} @ {row.get('company', '?')} | {result['reason'][:60]}")
 
         if result['score'] >= SCORE_THRESHOLD:
-            scored_jobs.append({
-                "title":   title,
-                "company": row.get('company', 'Unknown'),
-                "job_url": job_url,
-                "score":   result['score'],
-                "reason":  result['reason'],
-                "yoe":     result['yoe'],
-            })
+            job_entry = {
+                "title":           title,
+                "company":         row.get('company', 'Unknown'),
+                "job_url":         job_url,
+                "score":           result['score'],
+                "reason":          result['reason'],
+                "yoe":             result['yoe'],
+                "tailored_bullets": "",
+                "description":     description,
+            }
+            scored_jobs.append(job_entry)
 
-    # 3. Sort & send  (BUG FIX: was inside the loop)
+    # 3. Sort, tailor top jobs, export
     scored_jobs.sort(key=lambda x: x['score'], reverse=True)
     top_15 = scored_jobs[:15]
+
+    # Tailor CV bullets for high-scoring jobs
+    for job in top_15:
+        if job['score'] >= TAILOR_THRESHOLD:
+            print(f"  ✨ Tailoring CV for: {job['title']} @ {job['company']}")
+            job['tailored_bullets'] = tailor_resume_for_job(job['title'], job['description'])
+
+    # Export to Google Sheets
+    export_to_sheets(top_15)
+
+    # Send email
     print(f"\n{len(top_15)} jobs above threshold. Sending email...")
     send_email(top_15)
 
