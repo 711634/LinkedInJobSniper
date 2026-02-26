@@ -3,17 +3,16 @@ name: Daily Career Scout
 # Triggers
 on:
   schedule:
-    # Schedule: Runs at 00:00 UTC daily
-    # (Equals 08:00 AM Singapore/Beijing Time due to UTC+8)
-    - cron: '0 0 * * *'
+    # Runs at 08:00 UTC daily (8am London in winter; 9am London in summer/BST)
+    - cron: '0 8 * * *'
   # Allows manual triggering via the 'Run workflow' button (for testing)
   workflow_dispatch:
 
 jobs:
   run-agent:
-    runs-on: ubuntu-latest  # Runs on the latest Ubuntu environment
-
-    environment: JobSniperEnvVar # Specify the environment for the job. The environment must exist in the environment secrets setting on GitHub.
+    runs-on: ubuntu-latest
+    # Optional: use a GitHub Environment (Settings → Environments) for secrets; else uses repo Actions secrets
+    # environment: JobSniperEnvVar
 
     steps:
       # 1. Checkout code from repository (including the resumes folder)
@@ -34,10 +33,11 @@ jobs:
 
       # 4. Run the main script
       - name: Run Job Agent
-        # CRITICAL: Inject GitHub Secrets into environment variables
+        # CRITICAL: Inject GitHub Secrets. For Groq (free): API_KEY=groq_xxx, API_BASE=https://api.groq.com/openai/v1, LLM_MODEL=llama-3.1-8b-instant
         env:
-          OPENAI_API_KEY: ${{ secrets.API_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
           API_BASE: ${{ secrets.API_BASE }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
