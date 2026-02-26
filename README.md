@@ -72,20 +72,26 @@ SEARCH_TERMS = [
     "Junior Data Analyst",
     "Graduate Scheme Finance",
 ]
-LOCATIONS = ["London, England"]
+LOCATIONS    = ["London, England"]
 RESULT_LIMIT = 15   # per search term
 HOURS_OLD    = 24
+```
 
+## ⏰ Schedule
 
-⏰ Schedule
-Runs daily at 8:00 AM UTC (8:00 AM GMT / 9:00 AM BST in summer).
+Runs daily at **8:00 AM UTC** (8:00 AM GMT / 9:00 AM BST in summer).
 
 To change, edit `.github/workflows/linkedin-job-sniper.yml`:
+
 ```yaml
 - cron: '0 8 * * *'  # 8am UTC daily
-` ``
+```
 
-👨‍💻 Author
-Misbah — built on top of the original LinkedInJobSniper by Tao.
+## ⚠️ Disclaimer
+
+For educational purposes only. Web scraping may violate LinkedIn's Terms of Service. Use responsibly and at your own risk.
+
+## 👨‍💻 Author
+
+Misbah — built on top of the original [LinkedInJobSniper](https://github.com/tao-991/LinkedInJobSniper) by Tao.  
 Powered by Python, LangChain, Groq & GitHub Actions ☕
-
