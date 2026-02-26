@@ -98,6 +98,8 @@ Scoring criteria:
 1. Skill Match (50%): Alignment of required skills with resume.
 2. Seniority Fit (30%): Is this an entry-level/graduate role suitable for the candidate?
 3. Domain Fit (20%): Does the industry/function match the candidate's background?
+
+Respond in JSON format with keys: score, reason, yoe.
 """ + CRITERIA
 
 prompt_template   = ChatPromptTemplate.from_messages([
