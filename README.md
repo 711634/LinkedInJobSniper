@@ -80,12 +80,10 @@ HOURS_OLD    = 24
 ⏰ Schedule
 Runs daily at 8:00 AM UTC (8:00 AM GMT / 9:00 AM BST in summer).
 
-To change, edit .github/workflows/linkedin-job-sniper.yml:
-
-text
+To change, edit `.github/workflows/linkedin-job-sniper.yml`:
+```yaml
 - cron: '0 8 * * *'  # 8am UTC daily
-⚠️ Disclaimer
-For educational purposes only. Web scraping may violate LinkedIn's Terms of Service. Use responsibly and at your own risk.
+` ``
 
 👨‍💻 Author
 Misbah — built on top of the original LinkedInJobSniper by Tao.
