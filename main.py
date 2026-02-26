@@ -81,7 +81,7 @@ class JobEvaluation(BaseModel):
     yoe:    str = Field(description="Years of experience required, or 'Not Specified'.")
 
 llm            = ChatOpenAI(model=LLM_MODEL, api_key=API_KEY, base_url=BASE_URL, temperature=0)
-structured_llm = llm.with_structured_output(JobEvaluation)
+structured_llm = llm.with_structured_output(JobEvaluation, method="json_mode")
 
 system_template = """You are an expert career coach. Evaluate how well a job description matches a candidate's resume.
 Return a score (0-100), years of experience required, and a one-sentence reason.
