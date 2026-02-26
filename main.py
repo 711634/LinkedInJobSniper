@@ -38,7 +38,7 @@ LOCATIONS        = ["London, England"]
 RESULT_LIMIT     = 8
 HOURS_OLD        = 24
 SCORE_THRESHOLD  = int(os.getenv("SCORE_THRESHOLD", "45"))
-TAILOR_THRESHOLD = 75          # only tailor CV for high-scoring jobs
+TAILOR_THRESHOLD = 75
 PROXY_URL        = os.getenv("PROXY_URL") or None
 RESUME           = os.getenv("RESUME_TEXT") or None
 API_KEY          = os.getenv("API_KEY")
@@ -86,7 +86,6 @@ if not API_KEY:
 # ── LLM setup ─────────────────────────────────────────────
 llm = ChatOpenAI(model=LLM_MODEL, api_key=API_KEY, base_url=BASE_URL, temperature=0)
 
-# — Evaluation model —
 class JobEvaluation(BaseModel):
     score:  int = Field(description="Relevance score 0-100 based on resume match.")
     reason: str = Field(description="One-sentence reason for the score.")
@@ -106,7 +105,7 @@ Scoring criteria:
 Respond in JSON format with keys: score, reason, yoe.
 """ + CRITERIA
 
-eval_prompt  = ChatPromptTemplate.from_messages([
+eval_prompt = ChatPromptTemplate.from_messages([
     ("system", system_template),
     ("user", "RESUME:\n{resume}\n\nJOB TITLE: {title}\nJOB DESCRIPTION:\n{description}\n\nBe strict. Penalise roles requiring 3+ years experience.")
 ])
@@ -125,12 +124,11 @@ short HTML unordered list (<ul><li>...</li></ul>). No preamble, no explanation."
 tailor_chain = tailor_prompt | tailor_llm
 
 def tailor_resume_for_job(title: str, description: str) -> str:
-    """Returns an HTML bullet list of tailored resume points."""
     try:
         result = tailor_chain.invoke({
-            "resume":      RESUME[:3000],
+            "resume":      RESUME[:2000],
             "title":       title,
-            "description": description[:3000]
+            "description": description[:1500]
         })
         return result.content.strip()
     except Exception as e:
@@ -164,7 +162,6 @@ def export_to_sheets(jobs: List[dict]):
         return
     try:
         sheet = service.spreadsheets()
-        # Check if header row exists
         result = sheet.values().get(
             spreadsheetId=SHEET_ID, range="Sheet1!A1:A1"
         ).execute()
@@ -240,16 +237,11 @@ def evaluate_job(title: str, description: str) -> dict:
     if not description or len(str(description)) < 50:
         return {"score": 0, "reason": "No description", "yoe": "N/A"}
     try:
-      "resume": RESUME[:2000],       # was 3000
-    "title": title,
-    "description": description[:1500]  # was 3000
-})
-
-# In tailor_resume_for_job()
-result = tailor_chain.invoke({
-    "resume":      RESUME[:2000],  # was 3000
-    "description": description[:1500]  # was 3000
-})
+        result = evaluation_chain.invoke({
+            "resume":      RESUME[:2000],
+            "title":       title,
+            "description": description[:1500]
+        })
         return {"score": result.score, "reason": result.reason, "yoe": result.yoe}
     except Exception as e:
         print(f"  AI error for '{title}': {e}")
@@ -269,7 +261,6 @@ def send_email(top_jobs: List[dict]):
     for job in top_jobs:
         score_color = "#27ae60" if job['score'] >= 75 else "#e67e22"
 
-        # Tailored CV section (only shown for high-scoring jobs)
         tailor_html = ""
         if job.get("tailored_bullets"):
             tailor_html = f"""
@@ -328,7 +319,6 @@ def send_email(top_jobs: List[dict]):
 
 # ── Main ──────────────────────────────────────────────────
 def main():
-    # 1. Scrape all terms
     df = pd.DataFrame()
     for location in LOCATIONS:
         for term in SEARCH_TERMS:
@@ -341,7 +331,6 @@ def main():
     df = df.drop_duplicates(subset=["job_url"]).reset_index(drop=True)
     print(f"\nTotal unique jobs to evaluate: {len(df)}")
 
-    # 2. Score each job
     scored_jobs = []
     for _, row in df.iterrows():
         title       = row.get('title', 'Unknown')
@@ -359,32 +348,27 @@ def main():
         print(f"  [{result['score']:3d}] {title} @ {row.get('company', '?')} | {result['reason'][:60]}")
 
         if result['score'] >= SCORE_THRESHOLD:
-            job_entry = {
-                "title":           title,
-                "company":         row.get('company', 'Unknown'),
-                "job_url":         job_url,
-                "score":           result['score'],
-                "reason":          result['reason'],
-                "yoe":             result['yoe'],
+            scored_jobs.append({
+                "title":            title,
+                "company":          row.get('company', 'Unknown'),
+                "job_url":          job_url,
+                "score":            result['score'],
+                "reason":           result['reason'],
+                "yoe":              result['yoe'],
                 "tailored_bullets": "",
-                "description":     description,
-            }
-            scored_jobs.append(job_entry)
+                "description":      description,
+            })
 
-    # 3. Sort, tailor top jobs, export
     scored_jobs.sort(key=lambda x: x['score'], reverse=True)
     top_15 = scored_jobs[:15]
 
-    # Tailor CV bullets for high-scoring jobs
     for job in top_15:
         if job['score'] >= TAILOR_THRESHOLD:
             print(f"  ✨ Tailoring CV for: {job['title']} @ {job['company']}")
             job['tailored_bullets'] = tailor_resume_for_job(job['title'], job['description'])
 
-    # Export to Google Sheets
     export_to_sheets(top_15)
 
-    # Send email
     print(f"\n{len(top_15)} jobs above threshold. Sending email...")
     send_email(top_15)
 
