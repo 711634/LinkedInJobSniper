@@ -26,6 +26,13 @@ SEARCH_TERMS = [
     "Graduate Operations Analyst",
     "Junior Data Analyst",
     "Graduate Scheme Finance",
+        "Associate Product Manager",
+    "Strategy and Operations Analyst",
+    "GTM Associate",
+    "Operations Associate",
+    "Graduate Customer Success Manager",
+    "Business Development Associate",
+    "Graduate Consultant",
 ]
 LOCATIONS       = ["London, England"]
 RESULT_LIMIT    = 15          # per search term
