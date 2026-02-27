@@ -45,7 +45,7 @@ API_KEY          = os.getenv("API_KEY")
 BASE_URL         = os.getenv("API_BASE")
 LLM_MODEL        = os.getenv("LLM_MODEL", "mistral")
 CRITERIA         = os.getenv("CRITERIA", "")
-SHEET_ID         = os.getenv("GOOGLE_SHEET_ID") or None
+GOOGLE_SHEET_ID  = os.getenv("GOOGLE_SHEET_ID") or None
 
 # ── Resume: Google Drive fallback ─────────────────────────
 def load_resume_from_google_drive() -> str:
@@ -135,66 +135,6 @@ def tailor_resume_for_job(title: str, description: str) -> str:
         print(f"  Tailoring failed for '{title}': {e}")
         return ""
 
-# ── Google Sheets ─────────────────────────────────────────
-def get_sheets_service():
-    creds_json_str = os.getenv("GCP_CREDENTIALS_JSON")
-    if not creds_json_str:
-        return None
-    try:
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
-        creds_dict = json.loads(creds_json_str)
-        creds = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-        return build('sheets', 'v4', credentials=creds)
-    except Exception as e:
-        print(f"Sheets service init failed: {e}")
-        return None
-
-def export_to_sheets(jobs: List[dict]):
-    if not SHEET_ID:
-        print("No GOOGLE_SHEET_ID set — skipping Sheets export.")
-        return
-    service = get_sheets_service()
-    if not service:
-        return
-    try:
-        sheet = service.spreadsheets()
-        result = sheet.values().get(
-            spreadsheetId=SHEET_ID, range="Sheet1!A1:A1"
-        ).execute()
-        if not result.get("values"):
-            header = [["Date", "Score", "Title", "Company", "YoE", "Reason", "URL", "Applied?"]]
-            sheet.values().append(
-                spreadsheetId=SHEET_ID,
-                range="Sheet1!A1",
-                valueInputOption="RAW",
-                body={"values": header}
-            ).execute()
-
-        rows = [[
-            datetime.now().strftime("%d %b %Y"),
-            job["score"],
-            job["title"],
-            job["company"],
-            job["yoe"],
-            job["reason"],
-            job["job_url"],
-            "No"
-        ] for job in jobs]
-
-        sheet.values().append(
-            spreadsheetId=SHEET_ID,
-            range="Sheet1!A1",
-            valueInputOption="RAW",
-            body={"values": rows}
-        ).execute()
-        print(f"Exported {len(rows)} jobs to Google Sheets ✅")
-    except Exception as e:
-        print(f"Sheets export failed: {e}")
-
 # ── Scraping ──────────────────────────────────────────────
 def get_jobs_data(location: str, search_term: str) -> pd.DataFrame:
     proxies = [PROXY_URL] if PROXY_URL else None
@@ -247,6 +187,85 @@ def evaluate_job(title: str, description: str) -> dict:
         print(f"  AI error for '{title}': {e}")
         return {"score": 0, "reason": "AI Error", "yoe": "N/A"}
 
+# ── Google Sheets export ──────────────────────────────────
+def get_sheets_service():
+    """Initialise Google Sheets API client from service account JSON in GCP_CREDENTIALS_JSON."""
+    creds_json_str = os.getenv("GCP_CREDENTIALS_JSON")
+    if not creds_json_str:
+        print("No GCP_CREDENTIALS_JSON set — skipping Sheets export.")
+        return None
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
+        creds_dict = json.loads(creds_json_str)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        return build("sheets", "v4", credentials=creds)
+    except Exception as e:
+        print(f"Sheets service init failed: {e}")
+        return None
+
+
+def export_to_sheets(jobs: List[dict]):
+    """Append scored jobs to Google Sheets tracker, if configured."""
+    if not GOOGLE_SHEET_ID:
+        print("No GOOGLE_SHEET_ID set — skipping Sheets export.")
+        return
+
+    service = get_sheets_service()
+    if not service:
+        return
+
+    try:
+        sheet = service.spreadsheets()
+
+        # Ensure header exists on Sheet1
+        result = sheet.values().get(
+            spreadsheetId=GOOGLE_SHEET_ID, range="Sheet1!A1:A1"
+        ).execute()
+        if not result.get("values"):
+            header = [[
+                "Date",
+                "Score",
+                "Title",
+                "Company",
+                "YoE",
+                "Reason",
+                "URL",
+                "Applied?",
+            ]]
+            sheet.values().append(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                range="Sheet1!A1",
+                valueInputOption="RAW",
+                body={"values": header},
+            ).execute()
+
+        rows = [[
+            datetime.now().strftime("%d %b %Y"),
+            job["score"],
+            job["title"],
+            job["company"],
+            job["yoe"],
+            job["reason"],
+            job["job_url"],
+            "No",
+        ] for job in jobs]
+
+        sheet.values().append(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range="Sheet1!A1",
+            valueInputOption="RAW",
+            body={"values": rows},
+        ).execute()
+        print(f"Exported {len(rows)} jobs to Google Sheets ✅")
+    except Exception as e:
+        print(f"Sheets export failed: {e}")
+
+
 # ── Email ─────────────────────────────────────────────────
 def send_email(top_jobs: List[dict]):
     if not top_jobs:
@@ -284,8 +303,8 @@ def send_email(top_jobs: List[dict]):
         </tr>{tailor_html}"""
 
     sheets_note = ""
-    if SHEET_ID:
-        sheets_note = f'<p style="font-size:12px;color:#555;">📊 All jobs exported to <a href="https://docs.google.com/spreadsheets/d/{SHEET_ID}">your tracking sheet</a> — mark Applied when done!</p>'
+    if GOOGLE_SHEET_ID:
+        sheets_note = f'<p style="font-size:12px;color:#555;">📊 All jobs exported to <a href="https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}">your tracking sheet</a> — mark Applied when done!</p>'
 
     html = f"""<html><body style="font-family:Arial,sans-serif;max-width:900px;margin:auto;">
         <h2 style="color:#2c3e50;">🎯 LinkedIn Job Sniper — Daily Report</h2>
@@ -359,6 +378,7 @@ def main():
                 "description":      description,
             })
 
+    # 3. Sort, tailor, export & send
     scored_jobs.sort(key=lambda x: x['score'], reverse=True)
     top_15 = scored_jobs[:15]
 
@@ -368,7 +388,6 @@ def main():
             job['tailored_bullets'] = tailor_resume_for_job(job['title'], job['description'])
 
     export_to_sheets(top_15)
-
     print(f"\n{len(top_15)} jobs above threshold. Sending email...")
     send_email(top_15)
 
