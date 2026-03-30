@@ -43,7 +43,12 @@ PROXY_URL        = os.getenv("PROXY_URL") or None
 RESUME           = os.getenv("RESUME_TEXT") or None
 API_KEY          = os.getenv("API_KEY")
 BASE_URL         = os.getenv("API_BASE")
-LLM_MODEL        = os.getenv("LLM_MODEL", "mistral")
+_RAW_LLM_MODEL   = os.getenv("LLM_MODEL", "mistral")
+# Map friendly aliases to actual Groq model IDs where needed
+if _RAW_LLM_MODEL == "llama3-70b-8192":
+    LLM_MODEL = "llama-3.3-70b-versatile"
+else:
+    LLM_MODEL = _RAW_LLM_MODEL
 CRITERIA         = os.getenv("CRITERIA", "")
 GOOGLE_SHEET_ID  = os.getenv("GOOGLE_SHEET_ID") or None
 
@@ -210,60 +215,8 @@ def get_sheets_service():
 
 
 def export_to_sheets(jobs: List[dict]):
-    """Append scored jobs to Google Sheets tracker, if configured."""
-    if not GOOGLE_SHEET_ID:
-        print("No GOOGLE_SHEET_ID set — skipping Sheets export.")
-        return
-
-    service = get_sheets_service()
-    if not service:
-        return
-
-    try:
-        sheet = service.spreadsheets()
-
-        # Ensure header exists on Sheet1
-        result = sheet.values().get(
-            spreadsheetId=GOOGLE_SHEET_ID, range="Sheet1!A1:A1"
-        ).execute()
-        if not result.get("values"):
-            header = [[
-                "Date",
-                "Score",
-                "Title",
-                "Company",
-                "YoE",
-                "Reason",
-                "URL",
-                "Applied?",
-            ]]
-            sheet.values().append(
-                spreadsheetId=GOOGLE_SHEET_ID,
-                range="Sheet1!A1",
-                valueInputOption="RAW",
-                body={"values": header},
-            ).execute()
-
-        rows = [[
-            datetime.now().strftime("%d %b %Y"),
-            job["score"],
-            job["title"],
-            job["company"],
-            job["yoe"],
-            job["reason"],
-            job["job_url"],
-            "No",
-        ] for job in jobs]
-
-        sheet.values().append(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range="Sheet1!A1",
-            valueInputOption="RAW",
-            body={"values": rows},
-        ).execute()
-        print(f"Exported {len(rows)} jobs to Google Sheets ✅")
-    except Exception as e:
-        print(f"Sheets export failed: {e}")
+    """Sheets export disabled by configuration."""
+    return
 
 
 # ── Email ─────────────────────────────────────────────────
